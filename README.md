@@ -11,7 +11,7 @@ Standalone shellcode loader generator. Single Go binary with native GUI, no serv
   - **x86** — Heaven's Gate (32-bit to 64-bit mode switch syscall)
 - **Input**: Raw shellcode (.bin) or PE executable (.exe, auto-converted via Donut)
 - **Key handling**: Embed key in binary or pass via command-line argument
-- **GUI**: Native application window (Edge/Chrome app mode), auto-opens on launch
+- **GUI**: Win32 native window (lxn/walk), file dialog, build log
 
 ## Quick Start
 
@@ -23,7 +23,7 @@ Standalone shellcode loader generator. Single Go binary with native GUI, no serv
 .\0xL0ADER.exe
 ```
 
-The GUI window opens automatically. Select encryption, mode, upload your file, and click Generate.
+Select encryption, mode, browse your file, and click Generate. A save dialog lets you choose the output path.
 
 ## Install Dependencies
 
@@ -42,7 +42,17 @@ All dependencies are installed locally into `deps/`, no system-wide changes.
 ## Build from Source
 
 ```bash
+# Release (hides console window)
+go build -ldflags="-H windowsgui" -o 0xL0ADER.exe .
+
+# Development (shows console for debug output)
 go build -o 0xL0ADER.exe .
+```
+
+Requires `rsrc` for manifest regeneration (already committed as `rsrc.syso`):
+```bash
+go install github.com/akavel/rsrc@latest
+rsrc -manifest 0xL0ADER.manifest -o rsrc.syso
 ```
 
 ## Pipeline
