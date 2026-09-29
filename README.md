@@ -57,6 +57,26 @@ PE → Donut → ECL/RSA encrypt → inline data split → MinGW compile
 
 Set `PORT` to change the listening port (default: `9090`).
 
+## Tests
+
+| Shellcode size | Number of positive | AV Manufacturer |
+|---|---|---|
+| **5 KB** | 4/75 | Symantec, Elastic, Kaspersky, Microsoft |
+| **20 KB** | 2/74 | Symantec, Kaspersky |
+| **40 KB** | 3/75 | Elastic, Kaspersky, Microsoft |
+| **80 KB** | 2/75 | Kaspersky, Microsoft |
+| **100 KB** | 3/75 | Elastic, Kaspersky, Microsoft |
+| **200 KB** | 3/72 | Elastic, Kaspersky, Microsoft |
+| **500 KB** | **1/60** | Microsoft |
+| **1 MB** | 2/73 | Kaspersky, Microsoft |
+
+**Analysis:**
+- Detection is entirely based on ML/heuristics; there are no signature matches.
+- Best result: 500KB file — only **1/60** (Microsoft Wacatac ML).
+- Consistent detectors: **Kaspersky** (VHO:Convagent.gen) and **Microsoft** (Wacatac ML); the ML engines from both vendors are highly sensitive to MinGW statically linked PE files.
+- Symantec and Elastic results are inconsistent, fluctuating based on payload size.
+- All detection labels are generic ML classifications (e.g., `ML.Attribute`, `malicious (moderate confidence)`, `Wacatac.C!ml`); the file was not identified as a specific tool or malware family.
+
 ## License
 
 MIT
