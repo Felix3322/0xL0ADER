@@ -9,10 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -20,7 +23,7 @@ import (
 var uiHTML []byte
 
 func main() {
-	port := "9090"
+	port := "0"
 	if p := os.Getenv("PORT"); p != "" {
 		port = p
 	}
@@ -29,9 +32,53 @@ func main() {
 	http.HandleFunc("/api/generate", handleGenerate)
 	http.HandleFunc("/api/status", handleStatus)
 
-	log.Printf("0xU Standalone Loader Generator")
-	log.Printf("http://127.0.0.1:%s", port)
-	log.Fatal(http.ListenAndServe("127.0.0.1:"+port, nil))
+	ln, err := net.Listen("tcp", "127.0.0.1:"+port)
+	if err != nil {
+		log.Fatalf("Failed to bind: %v", err)
+	}
+	addr := ln.Addr().(*net.TCPAddr)
+	url := fmt.Sprintf("http://127.0.0.1:%d", addr.Port)
+
+	log.Printf("0xL0ADER — Shellcode Loader Generator")
+	log.Printf("Listening on %s", url)
+
+	openAppWindow(url)
+
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt)
+		<-c
+		log.Println("Shutting down...")
+		os.Exit(0)
+	}()
+
+	log.Fatal(http.Serve(ln, nil))
+}
+
+func openAppWindow(url string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	browsers := []struct {
+		path string
+		args []string
+	}{
+		{filepath.Join(os.Getenv("ProgramFiles(x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
+			[]string{"--app=" + url, "--window-size=800,700"}},
+		{filepath.Join(os.Getenv("ProgramFiles"), "Microsoft", "Edge", "Application", "msedge.exe"),
+			[]string{"--app=" + url, "--window-size=800,700"}},
+		{filepath.Join(os.Getenv("ProgramFiles"), "Google", "Chrome", "Application", "chrome.exe"),
+			[]string{"--app=" + url, "--window-size=800,700"}},
+		{filepath.Join(os.Getenv("ProgramFiles(x86)"), "Google", "Chrome", "Application", "chrome.exe"),
+			[]string{"--app=" + url, "--window-size=800,700"}},
+	}
+	for _, b := range browsers {
+		if _, err := os.Stat(b.path); err == nil {
+			exec.Command(b.path, b.args...).Start()
+			return
+		}
+	}
+	exec.Command("cmd", "/c", "start", url).Start()
 }
 
 func serveUI(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +166,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tmpDir, err := os.MkdirTemp("", "0xu-standalone-*")
+	tmpDir, err := os.MkdirTemp("", "0xL0ADER-*")
 	if err != nil {
 		jsonError(w, "failed to create temp directory", http.StatusInternalServerError)
 		return
@@ -129,7 +176,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	var buildLog []string
 	logStep := func(msg string) {
 		buildLog = append(buildLog, msg)
-		log.Printf("[0xU] %s", msg)
+		log.Printf("[0xL0ADER] %s", msg)
 	}
 
 	var shellcode []byte
@@ -371,7 +418,7 @@ func handleGenerate(w http.ResponseWriter, r *http.Request) {
 	} else if mode == "callback" {
 		archLabel = "x64 Callback"
 	}
-	logStep(fmt.Sprintf("Compiled 0xU loader (%s, %s, static)", encLabel, archLabel))
+	logStep(fmt.Sprintf("Compiled 0xL0ADER loader (%s, %s, static)", encLabel, archLabel))
 
 	outputData, err := os.ReadFile(outputExe)
 	if err != nil {
@@ -410,11 +457,13 @@ func findDonutExe() string {
 	exeDir := filepath.Dir(exePath)
 	candidates := []string{
 		filepath.Join(exeDir, "donut.exe"),
+		filepath.Join(exeDir, "deps", "donut.exe"),
 		filepath.Join(exeDir, "tools", "donut", "donut.exe"),
 		filepath.Join(exeDir, "..", "tools", "donut", "donut.exe"),
 		filepath.Join(exeDir, "..", "..", "tools", "donut", "donut.exe"),
+		filepath.Join(".", "donut.exe"),
+		filepath.Join(".", "deps", "donut.exe"),
 		filepath.Join(".", "tools", "donut", "donut.exe"),
-		filepath.Join("..", "tools", "donut", "donut.exe"),
 	}
 	for _, p := range candidates {
 		if _, err := os.Stat(p); err == nil {
@@ -429,6 +478,18 @@ func findDonutExe() string {
 }
 
 func findGpp() string {
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+	localCandidates := []string{
+		filepath.Join(exeDir, "deps", "mingw64", "bin", "g++.exe"),
+		filepath.Join(".", "deps", "mingw64", "bin", "g++.exe"),
+	}
+	for _, p := range localCandidates {
+		if _, err := os.Stat(p); err == nil {
+			abs, _ := filepath.Abs(p)
+			return abs
+		}
+	}
 	localAppData := os.Getenv("LOCALAPPDATA")
 	if localAppData != "" {
 		clionGpp := filepath.Join(localAppData, "Programs", "CLion", "bin", "mingw", "bin", "g++.exe")

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>0xU Loader</title>
+<title>0xL0ADER</title>
 <style>
 :root {
   --bg: #0a0a0a; --surface: #111; --border: #222; --border-hi: #333;
@@ -87,7 +87,7 @@ section { margin-bottom: 20px; }
 </head>
 <body>
 <div class="wrap">
-  <h1>0xU Loader</h1>
+  <h1>0xL0ADER</h1>
   <p class="sub">独立免杀加载器生成器 — 本地编译，无需 TeamServer</p>
 
   <div id="statusBar"></div>
@@ -270,7 +270,7 @@ async function doGenerate() {
         addLog('密钥已嵌入，双击运行', 'log-ok');
       }
 
-      const filename = `0xU_${encryption}_${mode}_${selectedFile.name.replace(/\.[^.]+$/, '')}.exe`;
+      const filename = `0xL0ADER_${encryption}_${mode}_${selectedFile.name.replace(/\.[^.]+$/, '')}.exe`;
       const blob = new Blob([bytes], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

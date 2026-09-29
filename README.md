@@ -1,6 +1,6 @@
 # 0xL0ADER
 
-Shellcode loader generator with multiple encryption and execution modes. Single Go binary with embedded web UI.
+Standalone shellcode loader generator. Single Go binary with native GUI, no server dependency.
 
 ## Features
 
@@ -11,30 +11,39 @@ Shellcode loader generator with multiple encryption and execution modes. Single 
   - **x86** — Heaven's Gate (32-bit to 64-bit mode switch syscall)
 - **Input**: Raw shellcode (.bin) or PE executable (.exe, auto-converted via Donut)
 - **Key handling**: Embed key in binary or pass via command-line argument
-- **Web UI**: Built-in browser interface on `localhost:9090`
+- **GUI**: Native application window (Edge/Chrome app mode), auto-opens on launch
 
 ## Quick Start
 
-Download the latest release, place `0xu.exe` alongside the `0xUBypass/` directory, then run:
+```powershell
+# Install dependencies (MinGW, Donut)
+.\install.ps1
 
-```
-0xu.exe
+# Run
+.\0xL0ADER.exe
 ```
 
-Open `http://localhost:9090` in your browser.
+The GUI window opens automatically. Select encryption, mode, upload your file, and click Generate.
+
+## Install Dependencies
+
+Run `install.ps1` to automatically download and install all required tools into the `deps/` directory:
+
+```powershell
+.\install.ps1
+```
+
+This installs:
+- **MinGW-w64 g++** (x86_64, UCRT) — C++ compiler and windres
+- **Donut** — PE-to-shellcode converter
+
+All dependencies are installed locally into `deps/`, no system-wide changes.
 
 ## Build from Source
 
 ```bash
-go build -o 0xu.exe .
+go build -o 0xL0ADER.exe .
 ```
-
-## Requirements
-
-- **MinGW g++** — `x86_64-w64-mingw32-g++` for x64/Callback modes, `i686-w64-mingw32-g++` for x86 mode
-- **windres** — Required for Callback mode (icon resources)
-- **Donut** (optional) — Required only for PE-to-shellcode conversion. Place `donut.exe` next to `0xu.exe` or in `tools/donut/`
-- **0xUBypass/** — C++ source files for RSA and x86 modes. Must be in the same directory as `0xu.exe`
 
 ## Pipeline
 
@@ -53,11 +62,9 @@ PE → Donut → RSA encrypt → pixel dilute (32bpp RGBA) → ICO resources →
 PE → Donut → ECL/RSA encrypt → inline data split → MinGW compile
 ```
 
-## Environment
-
-Set `PORT` to change the listening port (default: `9090`).
-
 ## Tests
+
+### VirusTotal (ECL Callback, dummy shellcode)
 
 | Shellcode size | Number of positive | AV Manufacturer |
 |---|---|---|
@@ -70,12 +77,20 @@ Set `PORT` to change the listening port (default: `9090`).
 | **500 KB** | **1/60** | Microsoft |
 | **1 MB** | 2/73 | Kaspersky, Microsoft |
 
-**Analysis:**
-- Detection is entirely based on ML/heuristics; there are no signature matches.
-- Best result: 500KB file — only **1/60** (Microsoft Wacatac ML).
-- Consistent detectors: **Kaspersky** (VHO:Convagent.gen) and **Microsoft** (Wacatac ML); the ML engines from both vendors are highly sensitive to MinGW statically linked PE files.
-- Symantec and Elastic results are inconsistent, fluctuating based on payload size.
-- All detection labels are generic ML classifications (e.g., `ML.Attribute`, `malicious (moderate confidence)`, `Wacatac.C!ml`); the file was not identified as a specific tool or malware family.
+- All detections are ML/heuristic-based, no signature matches
+- Best result: 500KB — **1/60** (Microsoft Wacatac ML only)
+- Not identified as any specific tool or malware family
+
+### Functional Tests (19KB test PE → Donut → full pipeline → execute)
+
+| Mode | Compile | Run | Payload Execution | Loader Size |
+|---|---|---|---|---|
+| ECL Callback | OK | OK | **PASS** | 130 KB |
+| RSA Callback | OK | OK | **PASS** | 618 KB |
+| ECL x64 | OK | OK | **PASS** | 100 KB |
+| RSA x64 | OK | OK | **PASS** | 327 KB |
+
+All 4 modes verified: test PE creates proof-of-execution files, loader runs and exits cleanly without crash.
 
 ## License
 
