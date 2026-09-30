@@ -76,18 +76,18 @@ PE → Donut → ECL/RSA encrypt → inline data split → MinGW compile
 
 ### VirusTotal (ECL Callback, dummy shellcode)
 
-| Shellcode size | Number of positive | AV Manufacturer |
-|---|---|---|
-| **5 KB** | 1/75 | Microsoft |
-| **20 KB** | **0/75** | — |
-| **40 KB** | **0/0** | — |
-| **80 KB** | 2/75 | Microsoft, Elastic |
-| **100 KB** | **0/0** | — |
-| **200 KB** | **0/0** | — |
-| **500 KB** | **0/0** | — |
-| **1 MB** | **0/0** | — |
+| Shellcode size | Number of positive | AV Manufacturer | VT Link |
+|---|---|---|---|
+| **5 KB** | 1/75 | Microsoft | [view](https://www.virustotal.com/gui/file/c057a9edf3b74b7f6c44d9e7a406ac2957e9947187e77b68184ae44b0434d756) |
+| **20 KB** | **0/0** | — | [view](https://www.virustotal.com/gui/file/ba540849a831c8823b6f5b73866ecd822c1c771e2fd2a46e83a4964b6a700f43) |
+| **40 KB** | **0/0** | — | [view](https://www.virustotal.com/gui/file/ad0ff2a3fc13eb7656c8ba91fe862ba837c934cde7538975fedde877feb37785) |
+| **80 KB** | 2/75 | Elastic, Microsoft | [view](https://www.virustotal.com/gui/file/7a7c624adb25ef22ca780620e8ada0a3ecb212a5f35462a2873185c2a90f3a39) |
+| **100 KB** | **0/0** | — | [view](https://www.virustotal.com/gui/file/25156b7f55ae6365a2edb970031092e7220619ba823e43d413dce3c831ab2dd4) |
+| **200 KB** | **0/0** | — | [view](https://www.virustotal.com/gui/file/111fe6e6b29fd32bdbfb5401418032875a2e36cfd433e2528d910924d42f86e2) |
+| **500 KB** | 2/75 | APEX, Elastic | [view](https://www.virustotal.com/gui/file/e8ac9d9f860d93cf5967ff6bbcd66aa08f21e45c2e6989a7c0d4eed9c58e6d0d) |
+| **1 MB** | **0/0** | — | [view](https://www.virustotal.com/gui/file/dd409245f4e38def70017755bca47f94e5b52c12e9af8022a8bcd75b5d8b1f8c) |
 
-- 6 out of 8 sizes: **zero detections**
+- 5 out of 8 sizes: **zero detections**
 - No Kaspersky, no ESET
 - All remaining detections are ML/heuristic-based, no signature matches
 - Not identified as any specific tool or malware family
