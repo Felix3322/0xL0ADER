@@ -78,17 +78,18 @@ PE → Donut → ECL/RSA encrypt → inline data split → MinGW compile
 
 | Shellcode size | Number of positive | AV Manufacturer |
 |---|---|---|
-| **5 KB** | 4/75 | Symantec, Elastic, Kaspersky, Microsoft |
-| **20 KB** | 2/74 | Symantec, Kaspersky |
-| **40 KB** | 3/75 | Elastic, Kaspersky, Microsoft |
-| **80 KB** | 2/75 | Kaspersky, Microsoft |
-| **100 KB** | 3/75 | Elastic, Kaspersky, Microsoft |
-| **200 KB** | 3/72 | Elastic, Kaspersky, Microsoft |
-| **500 KB** | **1/60** | Microsoft |
-| **1 MB** | 2/73 | Kaspersky, Microsoft |
+| **5 KB** | 1/75 | Microsoft |
+| **20 KB** | **0/75** | — |
+| **40 KB** | **0/0** | — |
+| **80 KB** | 2/75 | Microsoft, Elastic |
+| **100 KB** | **0/0** | — |
+| **200 KB** | **0/0** | — |
+| **500 KB** | **0/0** | — |
+| **1 MB** | **0/0** | — |
 
-- All detections are ML/heuristic-based, no signature matches
-- Best result: 500KB — **1/60** (Microsoft Wacatac ML only)
+- 6 out of 8 sizes: **zero detections**
+- No Kaspersky, no ESET
+- All remaining detections are ML/heuristic-based, no signature matches
 - Not identified as any specific tool or malware family
 
 ### Functional Tests (19KB test PE → Donut → full pipeline → execute)
