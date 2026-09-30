@@ -1,6 +1,7 @@
 # 0xL0ADER
 
-Standalone shellcode loader generator. Single Go binary with native GUI, no server dependency.
+Standalone shellcode loader generator. Made for huge shellcodes.
+<img width="471" height="386" alt="image" src="https://github.com/user-attachments/assets/633cf525-7390-49b3-bdd2-6dd903f20a66" />
 
 ## Features
 
